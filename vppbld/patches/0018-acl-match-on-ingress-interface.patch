@@ -1,5 +1,5 @@
 diff --git a/src/plugins/acl/acl.c b/src/plugins/acl/acl.c
-index 6724f503b..9b84ce0a6 100644
+index 6724f503b..f0bdfdf28 100644
 --- a/src/plugins/acl/acl.c
 +++ b/src/plugins/acl/acl.c
 @@ -177,6 +177,11 @@ acl_print_acl_x (acl_vector_print_func_t vpr, vlib_main_t * vm,
@@ -14,7 +14,21 @@ index 6724f503b..9b84ce0a6 100644
        out0 = format (out0, "\n");
        vpr (vm, out0);
      }
-@@ -376,6 +381,7 @@ acl_add_list (u32 count, vl_api_acl_rule_t rules[],
+@@ -334,6 +339,13 @@ acl_add_list (u32 count, vl_api_acl_rule_t rules[],
+       if (ntohs (rules[i].dstport_or_icmpcode_first) >
+ 	  ntohs (rules[i].dstport_or_icmpcode_last))
+ 	return VNET_API_ERROR_INVALID_VALUE_2;
++      /*
++       * The 5-tuple only carries the low 16 bits of the ingress interface,
++       * so an index that does not fit would silently be matched as a
++       * different interface. Refuse it instead of matching the wrong one.
++       */
++      if (ntohl (rules[i].in_sw_if_index) > 0xffff)
++	return VNET_API_ERROR_INVALID_SW_IF_INDEX;
+     }
+ 
+   if (*acl_list_index != ~0)
+@@ -376,6 +388,7 @@ acl_add_list (u32 count, vl_api_acl_rule_t rules[],
        r->dst_port_or_code_last = ntohs (rules[i].dstport_or_icmpcode_last);
        r->tcp_flags_value = rules[i].tcp_flags_value;
        r->tcp_flags_mask = rules[i].tcp_flags_mask;
@@ -22,7 +36,7 @@ index 6724f503b..9b84ce0a6 100644
      }
  
    if (~0 == *acl_list_index)
-@@ -1912,6 +1918,7 @@ copy_acl_rule_to_api_rule (vl_api_acl_rule_t * api_rule, acl_rule_t * r)
+@@ -1912,6 +1925,7 @@ copy_acl_rule_to_api_rule (vl_api_acl_rule_t * api_rule, acl_rule_t * r)
    api_rule->dstport_or_icmpcode_last = htons (r->dst_port_or_code_last);
    api_rule->tcp_flags_mask = r->tcp_flags_mask;
    api_rule->tcp_flags_value = r->tcp_flags_value;
@@ -30,7 +44,7 @@ index 6724f503b..9b84ce0a6 100644
  }
  
  static void
-@@ -2861,6 +2868,7 @@ acl_set_aclplugin_acl_fn (vlib_main_t * vm,
+@@ -2861,6 +2875,7 @@ acl_set_aclplugin_acl_fn (vlib_main_t * vm,
    u32 port2 = 0;
    u32 action = 0;
    u32 tcpflags, tcpmask;
@@ -38,7 +52,7 @@ index 6724f503b..9b84ce0a6 100644
    ip_prefix_t src, dst;
    u8 *tag = 0;
  
-@@ -2909,6 +2917,12 @@ acl_set_aclplugin_acl_fn (vlib_main_t * vm,
+@@ -2909,6 +2924,12 @@ acl_set_aclplugin_acl_fn (vlib_main_t * vm,
  	  vec_validate_acl_rules (rules, rule_idx);
  	  ip_prefix_encode2 (&dst, &rules[rule_idx].dst_prefix);
  	}
@@ -52,7 +66,7 @@ index 6724f503b..9b84ce0a6 100644
  	{
  	  vec_validate_acl_rules (rules, rule_idx);
 diff --git a/src/plugins/acl/acl_types.api b/src/plugins/acl/acl_types.api
-index b8a9482f0..1d7834f9d 100644
+index b8a9482f0..a239f3795 100644
 --- a/src/plugins/acl/acl_types.api
 +++ b/src/plugins/acl/acl_types.api
 @@ -69,6 +69,16 @@ typedef acl_rule
@@ -65,8 +79,8 @@ index b8a9482f0..1d7834f9d 100644
 + * data-plane port, so it is used as the "any" value rather than spending
 + * a separate valid flag - the same convention proto = 0 uses for L4.
 + *
-+ * Only the low 16 bits are matched, so this cannot distinguish interfaces
-+ * whose indices differ only above bit 15.
++ * Only the low 16 bits are matched, so an index that does not fit in 16
++ * bits is rejected rather than matched as a different interface.
 + */
 +  u32 in_sw_if_index;
  };
