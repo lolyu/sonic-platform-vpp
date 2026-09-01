@@ -35,3 +35,9 @@
 # 17. VXLAN VNET source-independent ("decap-any") decap: match local dst+vni
 #     ignoring outer src (RIOT / secondary-VTEP VNET decap) + l2_bvi helper
 0017-sonic-vxlan-vnet-source-independent-decap.patch
+# 19. acl: an ACL deny is an intentional forwarding decision, not an
+#     interface discard.  Flag denied buffers so error-drop keeps counting
+#     the per-node/per-ACE error but stops charging them to /if/drops,
+#     which SONiC surfaces as RX_DRP.  Without this a standby dual-ToR mux
+#     port reports a ~99% discard rate while working correctly.
+0019-acl-do-not-count-policy-denies-as-interface-drops.patch
