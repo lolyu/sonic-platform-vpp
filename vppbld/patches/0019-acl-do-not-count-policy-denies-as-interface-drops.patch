@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Longxiang Lyu <lolv@microsoft.com>
+Date: Tue, 1 Sep 2026 12:30:00 +0000
+Subject: [PATCH] acl: do not count policy denies as interface drops
+
+An ACL deny is an intentional forwarding decision, but VPP terminates it
+at the generic "error-drop" node, and error-drop charges every packet it
+frees to the ingress interface's drop counter.  That counter is exported
+as /if/drops, which saivpp maps to SAI_PORT_STAT_IF_IN_DISCARDS and SONiC
+renders as RX_DRP.
+
+The result is that a port doing exactly what it was configured to do
+looks broken.  On a dual-ToR the standby mux ports carry a deny ACL, so a
+healthy standby port reports something like
+
+    Ethernet16   RX_OK 5,769   RX_DRP 5,706
+
+i.e. a ~99% discard rate that will page an operator.  Real hardware does
+not behave this way: an ACL deny increments the ACL rule counter, not
+ifInDiscards.  RFC 1213 defines ifInDiscards as packets discarded despite
+"no errors ... to prevent their being deliverable", which is a resource
+condition, not a policy decision.
+
+Add a VNET_BUFFER_F_POLICY_DROP buffer flag.  The ACL plugin sets it when
+a packet is denied by the policy itself, and interface_drop_punt() then
+excludes those packets from the interface drop/punt counter.  Everything
+else is unchanged: the per-node "ACL deny packets" error counter, the
+per-ACE counters behind "show acl-plugin acl", packet tracing and buffer
+freeing all behave exactly as before, so the drops remain fully visible
+to an operator via "show errors".
+
+A deny forced by session-table exhaustion carries ACL_TOO_MANY_SESSIONS
+rather than ACL_DROP and is deliberately left unflagged: that one is a
+genuine resource discard and belongs in the interface counter.
+
+Signed-off-by: Longxiang Lyu <lolv@microsoft.com>
+---
+diff --git a/src/plugins/acl/dataplane_node.c b/src/plugins/acl/dataplane_node.c
+index 471228726..9465c8d64 100644
+--- a/src/plugins/acl/dataplane_node.c
++++ b/src/plugins/acl/dataplane_node.c
+@@ -548,6 +548,17 @@ acl_fa_inner_node_fn (vlib_main_t * vm,
+ 	    vnet_feature_next_u16 (&next[0], b[0]);
+ 	    /* if the action is not deny - then use that next */
+ 	    next[0] = action ? next[0] : 0;
++
++	    /*
++	     * A deny that came from the policy itself is an intentional
++	     * drop, so tell error-drop not to charge it to the interface
++	     * drop counter.  A deny forced by session table exhaustion
++	     * carries ACL_TOO_MANY_SESSIONS instead and is deliberately
++	     * left unflagged: that one is a genuine resource discard.
++	     */
++	    if (PREDICT_FALSE (0 == action)
++		&& b[0]->error == error_node->errors[ACL_FA_ERROR_ACL_DROP])
++	      b[0]->flags |= VNET_BUFFER_F_POLICY_DROP;
+ 	  }
+ 
+ 	  if (node_trace_on)	// PREDICT_FALSE (node->flags & VLIB_NODE_FLAG_TRACE))
+diff --git a/src/vnet/buffer.h b/src/vnet/buffer.h
+--- a/src/vnet/buffer.h
++++ b/src/vnet/buffer.h
+@@ -33,15 +33,24 @@
+   _ (16, IS_DVR, "dvr", 1)                                                    \
+   _ (17, QOS_DATA_VALID, "qos-data-valid", 0)                                 \
+   _ (18, GSO, "gso", 0)                                                       \
+-  _ (19, AVAIL1, "avail1", 1)                                                 \
+-  _ (20, AVAIL2, "avail2", 1)                                                 \
+-  _ (21, AVAIL3, "avail3", 1)                                                 \
+-  _ (22, AVAIL4, "avail4", 1)                                                 \
+-  _ (23, AVAIL5, "avail5", 1)                                                 \
+-  _ (24, AVAIL6, "avail6", 1)                                                 \
+-  _ (25, AVAIL7, "avail7", 1)                                                 \
+-  _ (26, AVAIL8, "avail8", 1)                                                 \
+-  _ (27, AVAIL9, "avail9", 1)
++  _ (19, POLICY_DROP, "policy-drop", 1)                                       \
++  _ (20, AVAIL1, "avail1", 1)                                                 \
++  _ (21, AVAIL2, "avail2", 1)                                                 \
++  _ (22, AVAIL3, "avail3", 1)                                                 \
++  _ (23, AVAIL4, "avail4", 1)                                                 \
++  _ (24, AVAIL5, "avail5", 1)                                                 \
++  _ (25, AVAIL6, "avail6", 1)                                                 \
++  _ (26, AVAIL7, "avail7", 1)                                                 \
++  _ (27, AVAIL8, "avail8", 1)
++
++/*
++ * VNET_BUFFER_F_POLICY_DROP marks a buffer that is being dropped on purpose
++ * by a forwarding policy (today: an ACL deny).  error-drop still counts the
++ * per-node error and frees the buffer as usual, but does not charge the
++ * drop to the ingress interface's drop counter: a policy deny is not an
++ * interface discard.  Drops caused by a lack of resources must NOT set this
++ * flag - those are genuine discards and belong in the interface counter.
++ */
+ 
+ /*
+  * Please allocate the FIRST available bit, redefine
+@@ -52,7 +61,7 @@
+ #define VNET_BUFFER_FLAGS_ALL_AVAIL                                           \
+   (VNET_BUFFER_F_AVAIL1 | VNET_BUFFER_F_AVAIL2 | VNET_BUFFER_F_AVAIL3 |       \
+    VNET_BUFFER_F_AVAIL4 | VNET_BUFFER_F_AVAIL5 | VNET_BUFFER_F_AVAIL6 |       \
+-   VNET_BUFFER_F_AVAIL7 | VNET_BUFFER_F_AVAIL8 | VNET_BUFFER_F_AVAIL9)
++   VNET_BUFFER_F_AVAIL7 | VNET_BUFFER_F_AVAIL8)
+ 
+ #define VNET_BUFFER_FLAGS_VLAN_BITS \
+   (VNET_BUFFER_F_VLAN_1_DEEP | VNET_BUFFER_F_VLAN_2_DEEP)
+diff --git a/src/vnet/interface_output.c b/src/vnet/interface_output.c
+--- a/src/vnet/interface_output.c
++++ b/src/vnet/interface_output.c
+@@ -1040,6 +1040,37 @@
+       count = clib_count_equal_u32 (sw_if_index, n_left);
+       n_left -= count;
+ 
++      /*
++       * Walk the block once to (a) discount intentional policy drops, which
++       * must not look like interface discards, and (b) for packets whose RX
++       * sw_if_index was rewritten (e.g. by bond-input), also charge the
++       * original member interface.
++       */
++      {
++	u32 n_policy = 0;
++
++	for (u32 j = 0; j < count; j++)
++	  {
++	    vlib_buffer_t *ob = bufs[off + j];
++	    u32 orig;
++
++	    if (ob->flags & VNET_BUFFER_F_POLICY_DROP)
++	      {
++		n_policy++;
++		continue;
++	      }
++
++	    orig = vnet_buffer2 (ob)->orig_rx_sw_if_index;
++	    if (orig && orig != sw_if_index[0])
++	      vlib_increment_simple_counter (cm, thread_index, orig, 1);
++	  }
++
++	count -= n_policy;
++      }
++
++      if (0 == count)
++	continue;
++
+       vlib_increment_simple_counter (cm, thread_index, sw_if_index[0], count);
+ 
+       /* Increment super-interface drop/punt counters for
+@@ -1048,19 +1079,6 @@
+       if (sw_if0->sup_sw_if_index != sw_if_index[0])
+ 	vlib_increment_simple_counter
+ 	  (cm, thread_index, sw_if0->sup_sw_if_index, count);
+-
+-      /* Also count against the original member interface if the
+-         RX sw_if_index was rewritten (e.g. by bond-input). */
+-      {
+-	u32 orig_off = frame->n_vectors - n_left - count;
+-	for (u32 j = 0; j < count; j++)
+-	  {
+-	    vlib_buffer_t *ob = bufs[orig_off + j];
+-	    u32 orig = vnet_buffer2 (ob)->orig_rx_sw_if_index;
+-	    if (orig && orig != sw_if_index[0])
+-	      vlib_increment_simple_counter (cm, thread_index, orig, 1);
+-	  }
+-      }
+     }
+ 
+   vnet_interface_main_t *im = &vnm->interface_main;

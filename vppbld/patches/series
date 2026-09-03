@@ -39,3 +39,10 @@
 #     rule be scoped to specific ports, so SAI_ACL_ENTRY_ATTR_FIELD_IN_PORTS
 #     no longer has to be silently dropped by the SAI layer.
 0018-acl-match-on-ingress-interface.patch
+
+# 19. acl: an ACL deny is an intentional forwarding decision, not an
+#     interface discard.  Flag denied buffers so error-drop keeps counting
+#     the per-node/per-ACE error but stops charging them to /if/drops,
+#     which SONiC surfaces as RX_DRP.  Without this a standby dual-ToR mux
+#     port reports a ~99% discard rate while working correctly.
+0019-acl-do-not-count-policy-denies-as-interface-drops.patch
