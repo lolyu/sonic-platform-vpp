@@ -79,6 +79,10 @@ function setup_ports_list()
         echo "PERPORT_BUF=$PERPORT_BUF" >> $VPP_ENV_FILE
     fi
 
+    if [ "x$VPP_WORKERS" != "x" ]; then
+        echo "VPP_WORKERS=$VPP_WORKERS" >> $VPP_ENV_FILE
+    fi
+
     if [ "x$SONIC_VPP_SWITCH" != "x" ]; then
         echo "SONIC_VPP_SWITCH=$SONIC_VPP_SWITCH" >> $VPP_ENV_FILE
     fi    
