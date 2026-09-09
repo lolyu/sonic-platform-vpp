@@ -51,6 +51,7 @@ cp $STARTUP_TMPL $TMP_FILE || error "Failed to copy template file"
 [ "$DPDK_DISABLE" == "y" ] && sed -i -e 's/plugin dpdk_plugin/#plugin dpdk_plugin/g' $TMP_FILE
 [ "$NO_LINUX_NL" == "y" ] && sed -i -e 's/plugin linux_nl_plugin/#plugin linux_nl_plugin/g' $TMP_FILE
 
+# 0 is allowed: VPP then forwards on vpp_main itself, with no dedicated worker thread.
 VPP_WORKERS=${VPP_WORKERS:=1}
 [[ "$VPP_WORKERS" =~ ^[0-9]+$ ]] || error "VPP_WORKERS must be a non-negative integer, got '$VPP_WORKERS'"
 sed -i -E -e "s/^([[:space:]]*)workers[[:space:]]+[0-9]+/\1workers $VPP_WORKERS/" $TMP_FILE

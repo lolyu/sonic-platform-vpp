@@ -102,6 +102,7 @@ cpu {
 	## Specify a number of workers to be created
 	## Workers are pinned to N consecutive CPU cores while skipping "skip-cores" CPU core(s)
 	## and main thread's CPU core
+	## Always rewritten by vpp_init.sh from $VPP_WORKERS (default 1; 0 = forward on vpp_main)
 	workers 1
 
 	## Set scheduling policy and priority of main and worker threads
