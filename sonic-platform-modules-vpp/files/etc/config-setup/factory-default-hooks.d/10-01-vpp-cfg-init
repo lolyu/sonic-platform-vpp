@@ -80,6 +80,8 @@ function setup_ports_list()
     fi
 
     if [ "x$VPP_WORKERS" != "x" ]; then
+        # validated here too: syncd_vpp_env is sourced, so anything written to it runs as shell
+        [[ "$VPP_WORKERS" =~ ^[0-9]+$ ]] || error "VPP_WORKERS must be a non-negative integer, got '$VPP_WORKERS'"
         echo "VPP_WORKERS=$VPP_WORKERS" >> $VPP_ENV_FILE
     fi
 
